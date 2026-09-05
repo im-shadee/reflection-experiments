@@ -1,177 +1,257 @@
+using System.Collections.Concurrent;
 using System.Reflection;
-using System.Text;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
-using reflection_experiments.tools;
 using ReflectionExperiments.Attributes;
 
 namespace ReflectionExperiments.Serializer;
 
-public class Serializer
+public static class Serializer
 {
-    private static readonly BindingFlags m_displayFlags = BindingFlags.NonPublic
+    private static readonly BindingFlags s_displayFlags = BindingFlags.NonPublic
                                                           | BindingFlags.Public
                                                           | BindingFlags.Static
                                                           | BindingFlags.Instance;
+
+    private static readonly JsonWriterOptions s_options = new() { Indented = true };
     
-    /*public void Write()
+    /// <summary>
+    /// Shade: Maps a display name to a field info.
+    /// </summary>
+    private struct FieldInfoEntry
     {
-        JsonWriterOptions options = new JsonWriterOptions()
-        {
-            Indented = true,
-        };
-
-        using MemoryStream stream = new MemoryStream();
-        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, options);
+        private string m_serializedName;
+        private FieldInfo m_fieldInfo;
         
-        writer.WriteStartObject();
-        writer.WriteNull("myProp");
-        writer.WriteNumber("myProp2", 15);
-        writer.WriteBoolean("myBool", true);
-        writer.WriteNumber("myEnum", 1);
-        writer.WriteEndObject();
-        writer.Flush();
-
-        string json = Encoding.UTF8.GetString(stream.ToArray());
-        FileWriter fileWriter = new FileWriter();
-        fileWriter.WriteAtRoot("myJson", ".json", json);
-        Console.WriteLine(json);
-    }*/
-
-    public void WriteTest(string content, object target)
-    {
-        if (string.IsNullOrWhiteSpace(content))
+        // Public accessors
+        public readonly string SerializedName => m_serializedName;
+        public readonly FieldInfo FieldInfo => m_fieldInfo;
+        
+        public FieldInfoEntry(string name, FieldInfo fieldInfo)
         {
-            throw new ArgumentException("Serializer@WriteTest: content is null or blank.");
+            m_serializedName = name;
+            m_fieldInfo = fieldInfo;
+        }
+    }
+    
+    // Shade: Cached dictionary (thread safe) to cache serialized fields per type.
+    // This avoids re-running heavy reflection steps on recurrent types
+    private static readonly ConcurrentDictionary<Type, FieldInfoEntry[]> s_fieldCache = new();
+    
+    public static void SerializeToJson(object target, Stream stream, [CallerArgumentExpression(nameof(target))] string? rootName = null)
+    {
+        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, s_options);
+        
+        if (!string.IsNullOrEmpty(rootName))
+        {
+            writer.WriteStartObject();
+            WriteObject(rootName, target, writer);
+            writer.WriteEndObject();
+        }
+        else
+        {
+            WriteObjectValue(target, writer);
         }
         
-        JsonWriterOptions options = new JsonWriterOptions()
-        {
-            Indented = true,
-        };
-
-        using MemoryStream stream = new MemoryStream();
-        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, options);
-        
-        // Shade: Write the first bracket
-        writer.WriteStartObject();
-
-        // Shade: Write the content
-        writer.WritePropertyName(target.GetType().Name);
-        writer.WriteRawValue(content, skipInputValidation: true);
-        
-        writer.WriteEndObject();
-        writer.Flush();
-        
-        string json = Encoding.UTF8.GetString(stream.ToArray());
-        FileWriter fileWriter = new FileWriter();
-        fileWriter.WriteAtRoot("myJson", ".json", json);
-        Console.WriteLine(json);
+        writer.Flush(); // Shade: Ensures all buffered bytes hit the underlying stream
     }
 
-    public string Serialize(object target)
+    private static FieldInfoEntry[] BuildValidFieldsArray(Type type)
     {
-        JsonWriterOptions options = new JsonWriterOptions()
-        {
-            Indented = true,
-        };
+        List<FieldInfoEntry> validFields = new List<FieldInfoEntry>();
 
-        using MemoryStream stream = new MemoryStream();
-        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, options);
-        
-        writer.WriteStartObject();
-        
-        Type targetType = target.GetType();
-
-        foreach (FieldInfo field in targetType.GetFields(m_displayFlags))
+        foreach (FieldInfo field in type.GetFields(s_displayFlags))
         {
-            string? serializedField = GetSerializedField(field);
+            if (!IsFieldValid(field, out string serializedName)) continue;
             
-            // Shade: If GetSerializedField returns null, the field is not meant to be serialized;
-            // don't write it and continue with the next field instead
-            if (serializedField == null) continue;
-            
-            WriteSerializedString(serializedField, field.GetValue(target), writer);
+            // Shade: Create and add the entry to the list if valid
+            validFields.Add(new FieldInfoEntry(serializedName, field));
         }
-        
-        writer.WriteEndObject();
-        writer.Flush();
-        
-        return Encoding.UTF8.GetString(stream.ToArray());
+
+        return validFields.ToArray();
     }
 
-    private string? GetSerializedField(FieldInfo field)
+    private static bool IsFieldValid(FieldInfo field, out string serializedName)
     {
-        Console.WriteLine($"Inspecting field {field.Name}.");
+        // Shade: Defaults to field name. Set custom name through SerializeAsAttribute if the field possesses one
+        serializedName = field.Name;
         
-        // Shade: Evaluate to an array once to prevent multiple enumeration
-        Attribute[] fieldAttributesEnumerable = field.GetCustomAttributes().ToArray();
-
+        // Shade: Keeps track of whether a field has a [SerializeField] attribute, allowing to serialize
+        // public/internal/protected fields
         bool hasSerializeField = false;
-        SerializeAsAttribute? serializeAs = null;
         
-        if (fieldAttributesEnumerable.Length > 0)
+        foreach (Attribute attribute in field.GetCustomAttributes())
         {
-            foreach (Attribute attribute in fieldAttributesEnumerable)
+            switch (attribute)
             {
-                switch (attribute)
-                {
-                    // Shade: If the field has an ignore attribute, do not serialize it and escape immediately
-                    case IgnoreAttribute: return null;
+                // Shade: If the field has an ignore attribute, do not serialize it and escape immediately
+                case IgnoreAttribute: return false;
                     
-                    case SerializeFieldAttribute:
-                        hasSerializeField = true;
-                        break;
-                    
-                    // Shade: Get the custom name to serialize this field to if it has one
-                    case SerializeAsAttribute serializeAsAttribute:
-                        serializeAs = serializeAsAttribute;
-                        break;
-                }
+                case SerializeFieldAttribute:
+                    hasSerializeField = true;
+                    break;
+                
+                // Shade: Get the custom name to serialize this field to if it has one
+                case SerializeAsAttribute serializeAsAttribute:
+                    serializedName = serializeAsAttribute.SerializedName;
+                    break;
             }
         }
         
-        // Shade: If the field is private and serialized, serialize it, else leave it unchanged
-        if (field.IsPrivate && !hasSerializeField) return null;
-        
-        // Shade: Set custom name if found, otherwise fall back to field name
-        return serializeAs != null ? serializeAs.SerializedName : field.Name;
+        // Shade: If the field is private/protected/internal and serialized or public, serialize it, else leave it unchanged
+        // Checking either Public or hasSerializeField allows to cover combined access modifiers
+        return field.IsPublic || hasSerializeField;
     }
 
-    private void WriteSerializedString(string serializedFieldName, object? value, Utf8JsonWriter writer)
+    private static void WriteSerializedValue(string? propertyName, object? value, Utf8JsonWriter writer)
     {
         switch (value)
         {
             case null:
-                writer.WriteNull(serializedFieldName);
+                if (propertyName != null) writer.WriteNull(propertyName);
+                else writer.WriteNullValue();
                 break;
-            
+
             case bool boolValue:
-                writer.WriteBoolean(serializedFieldName, boolValue);
+                if (propertyName != null) writer.WriteBoolean(propertyName, boolValue);
+                else writer.WriteBooleanValue(boolValue);
                 break;
-            
+
             case int intValue:
-                writer.WriteNumber(serializedFieldName, intValue);
+                if (propertyName != null) writer.WriteNumber(propertyName, intValue);
+                else writer.WriteNumberValue(intValue);
                 break;
             
+            case long longValue:
+                if (propertyName != null) writer.WriteNumber(propertyName, longValue);
+                else writer.WriteNumberValue(longValue);
+                break;
+
             case float floatValue:
-                writer.WriteNumber(serializedFieldName, floatValue);
+                if (propertyName != null) writer.WriteNumber(propertyName, floatValue);
+                else writer.WriteNumberValue(floatValue);
                 break;
-            
+
             case double doubleValue:
-                writer.WriteNumber(serializedFieldName, doubleValue);
+                if (propertyName != null) writer.WriteNumber(propertyName, doubleValue);
+                else writer.WriteNumberValue(doubleValue);
                 break;
-                
+
             case decimal decimalValue:
-                writer.WriteNumber(serializedFieldName, decimalValue);
+                if (propertyName != null) writer.WriteNumber(propertyName, decimalValue);
+                else writer.WriteNumberValue(decimalValue);
                 break;
-            
+
             case string stringValue:
-                writer.WriteString(serializedFieldName, stringValue);
+                if (propertyName != null) writer.WriteString(propertyName, stringValue);
+                else writer.WriteStringValue(stringValue);
                 break;
             
+            case char charValue:
+                if (propertyName != null) writer.WriteString(propertyName, charValue.ToString());
+                else writer.WriteStringValue(charValue.ToString());
+                break;
+            
+            case DateTime dateTimeValue:
+                if (propertyName != null) writer.WriteString(propertyName, dateTimeValue);
+                else writer.WriteStringValue(dateTimeValue);
+                break;
+            
+            case Enum enumValue:
+                WriteEnum(propertyName, enumValue, writer);
+                break;
+            
+            case System.Collections.IDictionary dict:
+                WriteDict(propertyName, dict, writer);
+                break;
+
+            // Shade: Ensure IEnumerable is always ran AFTER string, because string is an IEnumerable<char>
+            case System.Collections.IEnumerable enumerable:
+                WriteArray(propertyName, enumerable, writer);
+                break;
+            
+            // Shade: Determine what to write using reflection
             default:
-                throw new ArgumentOutOfRangeException(
-                    $"Serializer@WriteSerializedString: value '{value}' is not a valid object to serialize.");
+                if (propertyName != null) WriteObject(propertyName, value, writer);
+                else WriteObjectValue(value, writer);
+                break;
         }
+    }
+
+    private static void WriteEnum(string? propertyName, Enum value, Utf8JsonWriter writer)
+    {
+        Type underlying = Enum.GetUnderlyingType(value.GetType());
+
+        // Shade: Handles the ulong case to avoid potential overflows from converting to long only
+        if (underlying == typeof(ulong))
+        {
+            ulong ulongVal = ((IConvertible)value).ToUInt64(null);
+            if (propertyName != null) writer.WriteNumber(propertyName, ulongVal);
+            else writer.WriteNumberValue(ulongVal);
+        }
+        else
+        {
+            long longVal = ((IConvertible)value).ToInt64(null);
+            if (propertyName != null) writer.WriteNumber(propertyName, longVal);
+            else writer.WriteNumberValue(longVal);
+        }
+    }
+
+    private static void WriteArray(string? propertyName, System.Collections.IEnumerable enumerable, Utf8JsonWriter writer)
+    {
+        if (propertyName != null) writer.WriteStartArray(propertyName);
+        else writer.WriteStartArray();
+        
+        foreach (object? item in enumerable)
+        {
+            // Shade: Inside arrays, elements are written without a property name
+            WriteSerializedValue(null, item, writer);
+        }
+        
+        writer.WriteEndArray();
+    }
+
+    private static void WriteDict(string? propertyName, System.Collections.IDictionary dict, Utf8JsonWriter writer)
+    {
+        if (propertyName != null) writer.WriteStartObject(propertyName);
+        else writer.WriteStartObject();
+
+        foreach (System.Collections.DictionaryEntry entry in dict)
+        {
+            string keyStr = entry.Key?.ToString() ?? "null";
+            WriteSerializedValue(keyStr, entry.Value, writer);
+        }
+        
+        writer.WriteEndObject();
+    }
+
+    private static void WriteTypeFields(object target, Utf8JsonWriter writer)
+    {
+        Type targetType = target.GetType();
+
+        // Shade: Gets cached fields or builds them atomically if missing to avoid race condition bugs and double lookups
+        FieldInfoEntry[] fields = s_fieldCache.GetOrAdd(targetType, BuildValidFieldsArray);
+
+        foreach (FieldInfoEntry field in fields)
+        {
+            object? fieldValue = field.FieldInfo.GetValue(target);
+            
+            // Shade: Now, write each value and its name to JSON (recursively)
+            WriteSerializedValue(field.SerializedName, fieldValue, writer);
+        }
+    }
+
+    private static void WriteObject(string name, object target, Utf8JsonWriter writer)
+    {
+        writer.WriteStartObject(name);
+        WriteTypeFields(target, writer);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteObjectValue(object target, Utf8JsonWriter writer)
+    {
+        writer.WriteStartObject();
+        WriteTypeFields(target, writer);
+        writer.WriteEndObject();
     }
 }

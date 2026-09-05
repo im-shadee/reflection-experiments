@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using reflection_experiments.tools;
 using ReflectionExperiments.Serializer;
 
@@ -157,7 +158,7 @@ public sealed class InspectorApp
                     continue;
                 }
 
-                field = m_currentType?.GetField(null, m_flags);
+                field = m_currentType?.GetField(null!, m_flags);
                 if (field == null)
                 {
                     ProcessInvalidInput(2000);
@@ -344,9 +345,14 @@ public sealed class InspectorApp
         /*InspectorApp inspectorApp = new InspectorApp();
         inspectorApp.StartApp();*/
         Player player = new Player();
+
+        using MemoryStream stream = new MemoryStream();
+        Serializer.SerializeToJson(player, stream);
         
-        Serializer serializer = new Serializer();
-        string s = serializer.Serialize(player);
-        serializer.WriteTest(s, player);
+        // Shade: Get the value written in the stream and write it to file
+        string json = Encoding.UTF8.GetString(stream.ToArray());
+        
+        FileWriter fileWriter = new FileWriter();
+        fileWriter.WriteAtRoot($"myJson", ".json", json);
     }
 }
