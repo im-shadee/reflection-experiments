@@ -23,10 +23,10 @@ public class Player : IEquatable<Player>
         [SerializeField]
         private float m_defense;
         
-        public int Health { get => m_health; set; }
-        public int MaxHealth { get => m_maxHealth; set; }
-        public float Damage { get => m_damage; set; }
-        public float Defense { get => m_defense; set; }
+        public int Health { get => m_health; set => m_health = (int)Math.Clamp(m_health - value, 0f, m_maxHealth); }
+        public int MaxHealth { get => m_maxHealth; set => m_maxHealth = value; }
+        public float Damage { get => m_damage; set => m_damage = value; }
+        public float Defense { get => m_defense; set => m_defense = value; }
 
         public Stats(int health, int maxHealth, float damage, float defense)
         {
@@ -76,12 +76,6 @@ public class Player : IEquatable<Player>
     public float m_publicFieldToIgnore = 5f;
 
     public float m_publicFieldToSerialize = 5f;
-
-    public void TakeDamage(float amount)
-    {
-        m_playerStats.Health = 
-            (int)ExtendedMathTools.Clamp(m_playerStats.Health - amount, 0f, m_playerStats.MaxHealth);
-    }
 
     public void DisplayPlayerInfo()
     {

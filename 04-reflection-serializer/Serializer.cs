@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -13,7 +14,13 @@ public static class Serializer
                                                           | BindingFlags.Static
                                                           | BindingFlags.Instance;
 
-    private static readonly JsonWriterOptions s_options = new() { Indented = true };
+    private static readonly JsonWriterOptions s_writerOptions = new() { Indented = true };
+    
+    private static readonly JsonReaderOptions s_readerOptions = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
     
     /// <summary>
     /// Shade: Maps a display name to a field info.
@@ -38,24 +45,71 @@ public static class Serializer
     // This avoids re-running heavy reflection steps on recurrent types
     private static readonly ConcurrentDictionary<Type, FieldInfoEntry[]> s_fieldCache = new();
     
-    public static void SerializeToJson(object target, Stream stream, [CallerArgumentExpression(nameof(target))] string? rootName = null)
+    #region Public API
+    public static void SerializeToJson(object target, Stream stream, 
+        [CallerArgumentExpression(nameof(target))] string? rootName = null)
     {
-        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, s_options);
+        if (string.IsNullOrEmpty(rootName))
+        {
+            throw new Exception(
+                $"Serializer@SerializeToJson: Variable name from object '{target}' could not be retrieved.");
+        }
         
-        if (!string.IsNullOrEmpty(rootName))
-        {
-            writer.WriteStartObject();
-            WriteObject(rootName, target, writer);
-            writer.WriteEndObject();
-        }
-        else
-        {
-            WriteObjectValue(target, writer);
-        }
+        using Utf8JsonWriter writer = new Utf8JsonWriter(stream, s_writerOptions);
+        
+        writer.WriteStartObject();
+        WriteObject(rootName, target, writer);
+        writer.WriteEndObject();
         
         writer.Flush(); // Shade: Ensures all buffered bytes hit the underlying stream
     }
 
+    public static T? DeserializeFromJson<T>(string json, string rootName)
+    {
+        if (string.IsNullOrEmpty(rootName))
+        {
+            throw new Exception(
+                $"Serializer@SerializeToJson: root name is empty or null. Make sure to pass a valid string, like 'nameof(myVar)'.");
+        }
+        
+        // Shade: Convert JSON string to UTF-8 encoded bytes
+        byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
+        Utf8JsonReader reader = new Utf8JsonReader(jsonBytes, s_readerOptions);
+        
+        // Shade: Advance to the first token in the document
+        if (!reader.Read())
+        {
+            throw new JsonException("Serializer@SerializeToJson: Failed to read JSON stream: payload is empty.");
+        }
+
+        if (reader.TokenType == JsonTokenType.StartObject)
+        {
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType == JsonTokenType.PropertyName && reader.GetString() == rootName)
+                {
+                    reader.Read(); // Shade: Advance past property name to StartObject '{'
+                    break;
+                }
+                
+                reader.Skip();
+            }
+        }
+        
+        object? instance = Activator.CreateInstance(typeof(T));
+        if (instance == null) return (T?)instance;
+        
+        // Handle root wrapper object if present
+        if (reader.TokenType == JsonTokenType.StartObject)
+        {
+            PopulateObject(ref reader, ref instance);
+        }
+
+        return (T?)instance;
+    }
+    #endregion
+
+    #region Serialization Helpers
     private static FieldInfoEntry[] BuildValidFieldsArray(Type type)
     {
         List<FieldInfoEntry> validFields = new List<FieldInfoEntry>();
@@ -161,12 +215,12 @@ public static class Serializer
                 WriteEnum(propertyName, enumValue, writer);
                 break;
             
-            case System.Collections.IDictionary dict:
+            case IDictionary dict:
                 WriteDict(propertyName, dict, writer);
                 break;
 
             // Shade: Ensure IEnumerable is always ran AFTER string, because string is an IEnumerable<char>
-            case System.Collections.IEnumerable enumerable:
+            case IEnumerable enumerable:
                 WriteArray(propertyName, enumerable, writer);
                 break;
             
@@ -197,7 +251,7 @@ public static class Serializer
         }
     }
 
-    private static void WriteArray(string? propertyName, System.Collections.IEnumerable enumerable, Utf8JsonWriter writer)
+    private static void WriteArray(string? propertyName, IEnumerable enumerable, Utf8JsonWriter writer)
     {
         if (propertyName != null) writer.WriteStartArray(propertyName);
         else writer.WriteStartArray();
@@ -211,12 +265,12 @@ public static class Serializer
         writer.WriteEndArray();
     }
 
-    private static void WriteDict(string? propertyName, System.Collections.IDictionary dict, Utf8JsonWriter writer)
+    private static void WriteDict(string? propertyName, IDictionary dict, Utf8JsonWriter writer)
     {
         if (propertyName != null) writer.WriteStartObject(propertyName);
         else writer.WriteStartObject();
 
-        foreach (System.Collections.DictionaryEntry entry in dict)
+        foreach (DictionaryEntry entry in dict)
         {
             string keyStr = entry.Key?.ToString() ?? "null";
             WriteSerializedValue(keyStr, entry.Value, writer);
@@ -254,4 +308,160 @@ public static class Serializer
         WriteTypeFields(target, writer);
         writer.WriteEndObject();
     }
+    #endregion
+    
+    #region Deserialization Helpers
+    private static void PopulateObject(ref Utf8JsonReader reader, ref object target)
+    {
+        Type targetType = target.GetType();
+        FieldInfoEntry[] fields = s_fieldCache.GetOrAdd(targetType, BuildValidFieldsArray);
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject) return;
+            if (reader.TokenType != JsonTokenType.PropertyName) continue;
+            
+            string? propertyName = reader.GetString();
+            if (propertyName == null) continue;
+            
+            // Shade: Move to the property value
+            reader.Read(); 
+            
+            // Shade: Find matching cached field entry
+            FieldInfoEntry? entry = Array.Find(fields, f => f.SerializedName == propertyName);
+            if (entry.HasValue)
+            {
+                object? value = ReadValue(ref reader, entry.Value.FieldInfo.FieldType);
+                
+                // Shade: Set the deserialized value on the instance
+                entry.Value.FieldInfo.SetValue(target, value);
+            }
+            else
+            {
+                // Shade: Skip unmapped properties or unknown objects/arrays
+                reader.Skip();
+            }
+        }
+    }
+    
+    private static object? ReadValue(ref Utf8JsonReader reader, Type targetType)
+    {
+        // Shade: Handle JSON null tokens first
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        
+        // Shade: If targetType is a Nullable type, unwrap it (e.g., Nullable<int> => int)
+        Type underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        // Shade: Handle enums explicitly
+        if (underlyingType.IsEnum)
+        {
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                long longVal = reader.GetInt64();
+                return Enum.ToObject(underlyingType, longVal);
+            }
+
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                string? strVal = reader.GetString();
+                return strVal == null ? null : Enum.Parse(underlyingType, strVal, true);
+            }
+        }
+        
+        return reader.TokenType switch
+        {
+            // Shade: String-formatted types
+            JsonTokenType.String when underlyingType == typeof(char) => reader.GetString()?[0],
+            JsonTokenType.String when underlyingType == typeof(DateTime) => reader.GetDateTime(),
+            JsonTokenType.String => reader.GetString(),
+            
+            // Shade: Number types
+            JsonTokenType.Number when underlyingType == typeof(int) => reader.GetInt32(),
+            JsonTokenType.Number when underlyingType == typeof(float) => reader.GetSingle(),
+            JsonTokenType.Number when underlyingType == typeof(double) => reader.GetDouble(),
+            JsonTokenType.Number when underlyingType == typeof(decimal) => reader.GetDecimal(),
+            JsonTokenType.Number when underlyingType == typeof(long) => reader.GetInt64(),
+            
+            // Shade: Booleans
+            JsonTokenType.True or JsonTokenType.False => reader.GetBoolean(),
+            
+            // Shade: Complex types
+            JsonTokenType.StartObject when typeof(IDictionary).IsAssignableFrom(underlyingType) => ReadDictionary(ref reader, underlyingType),
+            JsonTokenType.StartObject => ReadNestedObject(ref reader, underlyingType),
+            JsonTokenType.StartArray => ReadArray(ref reader, underlyingType),
+            
+            _ => null
+        };
+    }
+
+    private static object? ReadArray(ref Utf8JsonReader reader, Type targetType)
+    {
+        // Shade: Determine element type (e.g., List<int> => int)
+        Type? elementType = targetType.IsArray ? targetType.GetElementType() : targetType.GetGenericArguments()[0];
+        if (elementType == null) return null;
+
+        Type listType = typeof(List<>).MakeGenericType(elementType);
+
+        IList? list = (IList?)Activator.CreateInstance(listType);
+        if (list == null) return null;
+
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            object? value = ReadValue(ref reader, elementType);
+            list.Add(value);
+        }
+
+        if (targetType.IsArray)
+        {
+            Array array = Array.CreateInstance(elementType, list.Count);
+            list.CopyTo(array, 0);
+            return array;
+        }
+        
+        return list;
+    }
+
+    private static object? ReadDictionary(ref Utf8JsonReader reader, Type targetType)
+    {
+        Type[] genericArgs = targetType.GetGenericArguments();
+        
+        // Shade: Ensure type has exactly 2 generic args (key/value)
+        if (genericArgs.Length != 2) return null;
+        
+        Type keyType = genericArgs[0];
+        Type valueType = genericArgs[1];
+        
+        IDictionary? dictionary = (IDictionary?)Activator.CreateInstance(targetType);
+        if (dictionary == null) return null;
+
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            string? keyStr = reader.GetString();
+            if (keyStr == null) continue;
+            
+            // Shade: Move to the property value
+            reader.Read();
+            
+            object? key = ReflectionTools.ConvertTo(keyType, keyStr);
+            object? value = ReadValue(ref reader, valueType);
+            
+            if (key != null)
+            {
+                dictionary.Add(key, value);
+            }
+        }
+        
+        return dictionary;
+    }
+
+    private static object? ReadNestedObject(ref Utf8JsonReader reader, Type targetType)
+    {
+        // Shade: Instantiate a new object/struct of targetType and populate it
+        object? instance = Activator.CreateInstance(targetType);
+        if (instance == null) return null;
+        
+        PopulateObject(ref reader, ref instance);
+        return instance;
+    }
+    #endregion
 }
