@@ -29,3 +29,10 @@ You can also deserialize data from the current object's file (you can modify the
 <img width="496" height="113" alt="Capture d&#39;écran_20260906_035506" src="https://github.com/user-attachments/assets/dba08fc6-93a9-4f43-a6e5-8d47f727e75c" />
 
 <img width="842" height="163" alt="Capture d&#39;écran_20260906_035520" src="https://github.com/user-attachments/assets/fca26719-04a0-431c-bbb4-24640a0386e9" />
+
+## License
+This project is under the **MIT license**
+
+You are free to use, modify, distribute, and include NekoDialogue in both personal and commercial projects.
+
+See LICENSE for the complete license text.
