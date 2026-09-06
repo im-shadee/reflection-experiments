@@ -55,6 +55,9 @@ public static class Serializer
                 $"Serializer@SerializeToJson: Variable name from object '{target}' could not be retrieved.");
         }
         
+        // Shade: Reject root objects that aren't decorated with [Serialize]
+        if (!IsTypeSerializable(target.GetType())) return;
+        
         using Utf8JsonWriter writer = new Utf8JsonWriter(stream, s_writerOptions);
         
         writer.WriteStartObject();
@@ -71,6 +74,9 @@ public static class Serializer
             throw new Exception(
                 $"Serializer@SerializeToJson: root name is empty or null. Make sure to pass a valid string, like 'nameof(myVar)'.");
         }
+        
+        // Shade: Reject root objects that aren't decorated with [Serialize]
+        if (!IsTypeSerializable(typeof(T))) return default;
         
         // Shade: Convert JSON string to UTF-8 encoded bytes
         byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
@@ -96,7 +102,7 @@ public static class Serializer
             }
         }
         
-        object? instance = Activator.CreateInstance(typeof(T));
+        object? instance = Activator.CreateInstance(typeof(T), nonPublic: true);
         if (instance == null) return (T?)instance;
         
         // Handle root wrapper object if present
@@ -110,6 +116,25 @@ public static class Serializer
     #endregion
 
     #region Serialization Helpers
+    private static bool IsTypeSerializable(Type type)
+    {
+        // Shade: Built-in types, primitives, and strings are naturally serializable
+        if (type.IsPrimitive || type.IsEnum || type == typeof(string) || 
+            type == typeof(decimal) || type == typeof(DateTime)) 
+        {
+            return true;
+        }
+
+        // Shade: BCL collections/arrays are naturally serializable
+        if (typeof(IEnumerable).IsAssignableFrom(type))
+        {
+            return true;
+        }
+
+        // Shade: For custom classes/structs, enforce the [Serialize] attribute
+        return type.IsDefined(typeof(SerializeAttribute), inherit: false);
+    }
+    
     private static FieldInfoEntry[] BuildValidFieldsArray(Type type)
     {
         List<FieldInfoEntry> validFields = new List<FieldInfoEntry>();
@@ -226,6 +251,9 @@ public static class Serializer
             
             // Shade: Determine what to write using reflection
             default:
+                // Shade: Skip writing entirely if the custom class/struct lacks the [Serialize] attribute
+                if (!IsTypeSerializable(value.GetType())) break;
+                
                 if (propertyName != null) WriteObject(propertyName, value, writer);
                 else WriteObjectValue(value, writer);
                 break;
@@ -404,7 +432,7 @@ public static class Serializer
 
         Type listType = typeof(List<>).MakeGenericType(elementType);
 
-        IList? list = (IList?)Activator.CreateInstance(listType);
+        IList? list = (IList?)Activator.CreateInstance(listType, nonPublic: true);
         if (list == null) return null;
 
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
@@ -433,7 +461,7 @@ public static class Serializer
         Type keyType = genericArgs[0];
         Type valueType = genericArgs[1];
         
-        IDictionary? dictionary = (IDictionary?)Activator.CreateInstance(targetType);
+        IDictionary? dictionary = (IDictionary?)Activator.CreateInstance(targetType, nonPublic: true);
         if (dictionary == null) return null;
 
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
@@ -458,8 +486,15 @@ public static class Serializer
 
     private static object? ReadNestedObject(ref Utf8JsonReader reader, Type targetType)
     {
+        // Shade: If it lacks [Serialize], skip the JSON block entirely
+        if (!IsTypeSerializable(targetType))
+        {
+            reader.Skip(); 
+            return null;
+        }
+        
         // Shade: Instantiate a new object/struct of targetType and populate it
-        object? instance = Activator.CreateInstance(targetType);
+        object? instance = Activator.CreateInstance(targetType, nonPublic: true);
         if (instance == null) return null;
         
         PopulateObject(ref reader, ref instance);

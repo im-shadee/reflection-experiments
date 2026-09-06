@@ -9,6 +9,7 @@ public enum TestStatus
     Pending = 2
 }
 
+[Serialize]
 public class SimpleModel
 {
     public int Id;
@@ -16,6 +17,7 @@ public class SimpleModel
     public bool IsActive;
 }
 
+[Serialize]
 public class AttributeModel
 {
     public string VisibleField = string.Empty;
@@ -33,6 +35,7 @@ public class AttributeModel
     public string GetPrivateField() => m_privateField;
 }
 
+[Serialize]
 public class ComplexModel
 {
     public SimpleModel Inner = new();
@@ -40,4 +43,22 @@ public class ComplexModel
     public TestStatus Status;
     public Dictionary<TestStatus, string> EnumDict = new();
     public Dictionary<Guid, int> GuidDict = new();
+}
+
+[Serialize]
+internal class InternalModel
+{
+    public string InternalData = string.Empty;
+}
+
+public class UnserializableModel
+{
+    public string SecretData = "Should not be seen";
+}
+
+[Serialize]
+public class WrapperModel
+{
+    public string AllowedData = string.Empty;
+    public UnserializableModel HiddenObject = new(); // Should be skipped
 }

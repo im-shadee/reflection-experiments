@@ -202,7 +202,7 @@ public class SerializedInspector
                 
                 break; // Shade: Exit loop on success
             }
-            catch (Exception)
+            catch
             {
                 ProcessInvalidInput(2000);
                 return;
@@ -248,7 +248,7 @@ public class SerializedInspector
         {
             field?.SetValue(m_currentObject, value);
         }
-        catch (Exception e)
+        catch
         {
             ProcessInvalidInput(2000, "An unknown error occured. Check logs.");
         }

@@ -1,5 +1,6 @@
 using System.Text;
 using NUnit.Framework;
+using ReflectionExperiments.Attributes;
 
 namespace ReflectionExperiments.Serializer.Tests;
 
@@ -8,6 +9,18 @@ public class SerializerTests
 {
     private static bool ShouldLogDebug => 
         Environment.GetEnvironmentVariable("LOG_DEBUG") == "true";
+    
+    [Serialize]
+    private class PrivateModel
+    {
+        public string PrivateData = string.Empty;
+    }
+
+    [Serialize]
+    protected class ProtectedModel
+    {
+        public string ProtectedData = string.Empty;
+    }
     
     private static void Log(string message)
     {
@@ -156,5 +169,65 @@ public class SerializerTests
         
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.Name, Is.Null);
+    }
+    
+    [Test]
+    public void NonPublicClasses_WithSerializeAttribute_SerializeAndDeserializeCorrectly()
+    {
+        InternalModel internalModel = new() { InternalData = "Internal" };
+        PrivateModel privateModel = new() { PrivateData = "Private" };
+        ProtectedModel protectedModel = new() { ProtectedData = "Protected" };
+
+        string internalJson = SerializeToString(internalModel, "internal");
+        string privateJson = SerializeToString(privateModel, "private");
+        string protectedJson = SerializeToString(protectedModel, "protected");
+
+        Assert.That(internalJson, Does.Contain("\"InternalData\": \"Internal\""));
+        Assert.That(privateJson, Does.Contain("\"PrivateData\": \"Private\""));
+        Assert.That(protectedJson, Does.Contain("\"ProtectedData\": \"Protected\""));
+
+        InternalModel? desInternal = Serializer.DeserializeFromJson<InternalModel>(internalJson, "internal");
+        PrivateModel? desPrivate = Serializer.DeserializeFromJson<PrivateModel>(privateJson, "private");
+        ProtectedModel? desProtected = Serializer.DeserializeFromJson<ProtectedModel>(protectedJson, "protected");
+
+        Assert.That(desInternal?.InternalData, Is.EqualTo("Internal"));
+        Assert.That(desPrivate?.PrivateData, Is.EqualTo("Private"));
+        Assert.That(desProtected?.ProtectedData, Is.EqualTo("Protected"));
+    }
+
+    [Test]
+    public void RootClass_WithoutSerializeAttribute_HandledGracefully()
+    {
+        UnserializableModel model = new();
+
+        // Shade: Should not throw, should early return
+        string json = SerializeToString(model, "model");
+        Assert.That(json, Is.Empty);
+
+        // Shade: Should return default instead of throwing
+        UnserializableModel? result = Serializer.DeserializeFromJson<UnserializableModel>(json, "model");
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public void NestedClass_WithoutSerializeAttribute_IsIgnored()
+    {
+        WrapperModel wrapper = new WrapperModel
+        {
+            AllowedData = "Public Info",
+            HiddenObject = new UnserializableModel { SecretData = "Super Secret" }
+        };
+
+        string json = SerializeToString(wrapper, "wrapper");
+        
+        Log($"[WRAPPER JSON] {json}");
+
+        // The primitive string field should be serialized
+        Assert.That(json, Does.Contain("\"AllowedData\": \"Public Info\""));
+        
+        // The nested object without [Serialize] should be completely skipped
+        Assert.That(json, Does.Not.Contain("HiddenObject"));
+        Assert.That(json, Does.Not.Contain("SecretData"));
+        Assert.That(json, Does.Not.Contain("Super Secret"));
     }
 }

@@ -166,7 +166,7 @@ public sealed class InspectorApp
                 
                 break; // Shade: Exit loop on success
             }
-            catch (Exception e)
+            catch
             {
                 ProcessInvalidInput(2000);
                 return;
@@ -212,7 +212,7 @@ public sealed class InspectorApp
         {
             field?.SetValue(m_currentObject, value);
         }
-        catch (Exception e)
+        catch
         {
             ProcessInvalidInput(2000, "An unknown error occured. Check logs.");
         }
