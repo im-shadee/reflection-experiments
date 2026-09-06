@@ -1,6 +1,6 @@
-{
-  "player": {
-    "m_playerName": "Player1",
+﻿{
+  "m_currentObject": {
+    "m_playerName": "a523",
     "m_playerStats": {
       "m_health": 10,
       "m_maxHealth": 10,

@@ -331,10 +331,10 @@ public static class Serializer
             FieldInfoEntry? entry = Array.Find(fields, f => f.SerializedName == propertyName);
             if (entry.HasValue)
             {
-                object? value = ReadValue(ref reader, entry.Value.FieldInfo.FieldType);
+                object? value = ReadValue(ref reader, entry.Value.FieldInfo?.FieldType);
                 
                 // Shade: Set the deserialized value on the instance
-                entry.Value.FieldInfo.SetValue(target, value);
+                entry.Value.FieldInfo?.SetValue(target, value);
             }
             else
             {
@@ -344,8 +344,10 @@ public static class Serializer
         }
     }
     
-    private static object? ReadValue(ref Utf8JsonReader reader, Type targetType)
+    private static object? ReadValue(ref Utf8JsonReader reader, Type? targetType)
     {
+        if (targetType == null) return null;
+        
         // Shade: Handle JSON null tokens first
         if (reader.TokenType == JsonTokenType.Null) return null;
         

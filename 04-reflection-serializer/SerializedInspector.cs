@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using System.Reflection;
+using System.Text;
+using ReflectionExperiments.Serializer;
 
-public sealed class InspectorApp
+public class SerializedInspector
 {
     private Type? m_currentType;
     private object? m_currentObject;
@@ -18,6 +21,7 @@ public sealed class InspectorApp
         SetField,
         InvokeMethod,
         Cancel,
+        Deserialize,
     }
 
     public void StartApp()
@@ -60,6 +64,7 @@ public sealed class InspectorApp
                 catch
                 {
                     ProcessInvalidInput(2000);
+                    return;
                 }
             }
             
@@ -97,6 +102,10 @@ public sealed class InspectorApp
                 case eOptions.InvokeMethod:
                     InvokeMethod();
                     break;
+                
+                case eOptions.Deserialize:
+                    Deserialize();
+                    break;
             
                 case eOptions.Cancel:
                 default:
@@ -119,6 +128,7 @@ public sealed class InspectorApp
             Console.WriteLine("\t2. Set a field");
             Console.WriteLine("\t3. Invoke a method");
             Console.WriteLine("\t4. Change class");
+            Console.WriteLine("\t5. (NEW) Deserialize from file");
 
             string? input = Console.ReadLine();
 
@@ -130,6 +140,32 @@ public sealed class InspectorApp
 
             return selection;
         }
+    }
+
+    private void Deserialize()
+    {
+        FileWriter fileWriter = new FileWriter();
+        string json = string.Empty;
+        
+        try
+        {
+            json = fileWriter.GetFileContent($"inspector_data_{m_currentType?.Name.ToLower() ?? "null"}", ".meta");
+        }
+        catch (FileNotFoundException)
+        {
+            Console.WriteLine("Could not find inspector data file. Filename is either wrong, or no data exists yet.");
+            return;
+        }
+        
+        if (m_currentType == null) return;
+        
+        MethodInfo? method = typeof(Serializer).GetMethod(nameof(Serializer.DeserializeFromJson));
+        MethodInfo? genericMethod = method?.MakeGenericMethod(m_currentType);
+        
+        object? deserializedObj = genericMethod?.Invoke(null, new object[] { json, "m_currentObject" });
+        
+        if (deserializedObj != null) m_currentObject = deserializedObj;
+        Console.WriteLine($"Deserialized object data: " + m_currentObject);
     }
     
     private void SetField()
@@ -166,7 +202,7 @@ public sealed class InspectorApp
                 
                 break; // Shade: Exit loop on success
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 ProcessInvalidInput(2000);
                 return;
@@ -218,7 +254,19 @@ public sealed class InspectorApp
         }
         
         Console.WriteLine($"New value: {field?.GetValue(m_currentObject)}");
-        ChooseOptions();
+
+        if (m_currentObject != null)
+        {
+            // Shade: NEW: Serialize the new values into a json file
+            using MemoryStream stream = new MemoryStream();
+            Serializer.SerializeToJson(m_currentObject, stream);
+            
+            // Shade: Get the value written in the stream and write it to file
+            string json = Encoding.UTF8.GetString(stream.ToArray());
+            
+            FileWriter fileWriter = new FileWriter();
+            fileWriter.WriteAtRoot($"inspector_data_{m_currentType?.Name.ToLower() ?? "null"}", ".meta", json);
+        }
     }
 
     private void InvokeMethod()
@@ -257,6 +305,7 @@ public sealed class InspectorApp
             catch
             {
                 ProcessInvalidInput(2000);
+                return;
             }
         }
 
@@ -306,6 +355,7 @@ public sealed class InspectorApp
             catch
             {
                 ProcessInvalidInput(2000);
+                return;
             }
         }
         
@@ -320,15 +370,14 @@ public sealed class InspectorApp
         method.Invoke(m_currentObject, passedParameters.ToArray());
     }
 
-    private async void ProcessInvalidInput(int msTimeout, string? customMessage = null)
+    private void ProcessInvalidInput(int msTimeout, string? customMessage = null)
     {
         Console.ForegroundColor = ConsoleColor.Red;
         
         // Shade: Displays the default message if customMessage else customMessage
-        // Wait asynchronously to avoid freezing the terminal
         Console.WriteLine(customMessage ?? "Invalid input. Please retry.");
         Console.ResetColor();
         
-        await Task.Delay(msTimeout);
+        Thread.Sleep(msTimeout);
     }
 }

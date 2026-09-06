@@ -79,8 +79,13 @@ public class Player : IEquatable<Player>
 
     public void DisplayPlayerInfo()
     {
-        Console.WriteLine($"Player: '{m_name}' | Health: {m_playerStats.Health} | Max Health: {m_playerStats.MaxHealth} " +
-                          $"| Damage: {m_playerStats.Damage} | Defense: {m_playerStats.Defense}");
+        Console.WriteLine(_GetPlayerInfo());
+    }
+
+    private string _GetPlayerInfo()
+    {
+        return $"Player: '{m_name}' | Health: {m_playerStats.Health} | Max Health: {m_playerStats.MaxHealth} " +
+               $"| Damage: {m_playerStats.Damage} | Defense: {m_playerStats.Defense}";
     }
 
     private void SetName(string name, bool displayChangeInConsole = true)
@@ -104,4 +109,6 @@ public class Player : IEquatable<Player>
     }
 
     public override int GetHashCode() => HashCode.Combine(m_name, m_playerStats);
+
+    public override string ToString() => _GetPlayerInfo();
 }
