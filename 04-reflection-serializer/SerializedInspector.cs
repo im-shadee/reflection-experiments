@@ -21,10 +21,10 @@ public class SerializedInspector
         DisplayInfo = 0,
         SetField,
         InvokeMethod,
-        Cancel,
-        Deserialize,
         Serialize,
+        Deserialize,
         DisplayDependencyGraph,
+        Cancel,
     }
 
     public void StartApp()
@@ -90,7 +90,7 @@ public class SerializedInspector
         while (keepRunning)
         {
             int inputInt = GetMenuSelection(); // Shade: Get and validate user input (1-4)
-            eOptions option = (eOptions)(inputInt - 1);
+            eOptions option = s_options[inputInt - 1];
 
             switch (option)
             {
@@ -138,10 +138,10 @@ public class SerializedInspector
             Console.WriteLine("\t1. Display type info");
             Console.WriteLine("\t2. Set a field");
             Console.WriteLine("\t3. Invoke a method");
-            Console.WriteLine("\t4. Change class");
+            Console.WriteLine("\t4. (NEW) Serialize to file");
             Console.WriteLine("\t5. (NEW) Deserialize from file");
-            Console.WriteLine("\t6. (NEW) Serialize to file");
-            Console.WriteLine("\t7. (NEW) Show dependency graph");
+            Console.WriteLine("\t6. (NEW) Show dependency graph");
+            Console.WriteLine("\t7. Change class");
 
             string? input = Console.ReadLine();
 
