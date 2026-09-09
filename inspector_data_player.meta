@@ -1,0 +1,33 @@
+﻿{
+  "m_currentObject": {
+    "$type": "Player, reflection-experiments, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
+    "m_playerName": "Player1",
+    "m_playerStats": {
+      "$type": "Player\u002BStats, reflection-experiments, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
+      "m_health": 10,
+      "m_maxHealth": 10,
+      "m_damage": 15,
+      "m_defense": 7
+    },
+    "m_myList": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "m_myDict": {
+      "1": 1,
+      "2": 2,
+      "3": 3,
+      "4": 4
+    },
+    "PublicFieldToSerialize": 5,
+    "m_inventory": {
+      "$type": "ReflectionExperiments.tools.InventoryTest, reflection-experiments, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+    },
+    "m_weapon": {
+      "$type": "ReflectionExperiments.tools.Sword, reflection-experiments, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+    }
+  }
+}

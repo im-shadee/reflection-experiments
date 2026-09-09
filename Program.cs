@@ -28,7 +28,7 @@ public class Program
         ProcessStartInfo startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = "test --logger \"console;verbosity=detailed\"",
+            Arguments = "test",
             UseShellExecute = false,
             RedirectStandardOutput = false,
             RedirectStandardError = false,

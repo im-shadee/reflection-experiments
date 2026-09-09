@@ -1,7 +1,8 @@
-using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using ReflectionExperiments.DIInjection;
 using ReflectionExperiments.Serializer;
+using ReflectionExperiments.tools;
 
 public class SerializedInspector
 {
@@ -22,6 +23,8 @@ public class SerializedInspector
         InvokeMethod,
         Cancel,
         Deserialize,
+        Serialize,
+        DisplayDependencyGraph,
     }
 
     public void StartApp()
@@ -106,6 +109,14 @@ public class SerializedInspector
                 case eOptions.Deserialize:
                     Deserialize();
                     break;
+                
+                case eOptions.Serialize:
+                    Serialize();
+                    break;
+                
+                case eOptions.DisplayDependencyGraph:
+                    DisplayDependencyGraph();
+                    break;
             
                 case eOptions.Cancel:
                 default:
@@ -129,6 +140,8 @@ public class SerializedInspector
             Console.WriteLine("\t3. Invoke a method");
             Console.WriteLine("\t4. Change class");
             Console.WriteLine("\t5. (NEW) Deserialize from file");
+            Console.WriteLine("\t6. (NEW) Serialize to file");
+            Console.WriteLine("\t7. (NEW) Show dependency graph");
 
             string? input = Console.ReadLine();
 
@@ -140,6 +153,16 @@ public class SerializedInspector
 
             return selection;
         }
+    }
+
+    private void DisplayDependencyGraph()
+    {
+        if (m_currentType == null) return;
+        
+        Container container = new Container();
+        container.Register<IWeapon, Sword>();
+        container.Register<IInventoryService, InventoryTest>();
+        Console.WriteLine(container.GetDependencyGraph(m_currentType));
     }
 
     private void Deserialize()
@@ -255,18 +278,22 @@ public class SerializedInspector
         
         Console.WriteLine($"New value: {field?.GetValue(m_currentObject)}");
 
-        if (m_currentObject != null)
-        {
-            // Shade: NEW: Serialize the new values into a json file
-            using MemoryStream stream = new MemoryStream();
-            Serializer.SerializeToJson(m_currentObject, stream);
+        // Shade: NEW: Serialize the new values into a json file
+        Serialize();
+    }
+
+    private void Serialize()
+    {
+        if (m_currentObject == null) return;
+        
+        using MemoryStream stream = new MemoryStream();
+        Serializer.SerializeToJson(m_currentObject, stream);
             
-            // Shade: Get the value written in the stream and write it to file
-            string json = Encoding.UTF8.GetString(stream.ToArray());
+        // Shade: Get the value written in the stream and write it to file
+        string json = Encoding.UTF8.GetString(stream.ToArray());
             
-            FileWriter fileWriter = new FileWriter();
-            fileWriter.WriteAtRoot($"inspector_data_{m_currentType?.Name.ToLower() ?? "null"}", ".meta", json);
-        }
+        FileWriter fileWriter = new FileWriter();
+        fileWriter.WriteAtRoot($"inspector_data_{m_currentType?.Name.ToLower() ?? "null"}", ".meta", json);
     }
 
     private void InvokeMethod()

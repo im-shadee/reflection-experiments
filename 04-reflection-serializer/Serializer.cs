@@ -118,6 +118,12 @@ public static class Serializer
     #region Serialization Helpers
     private static bool IsTypeSerializable(Type type)
     {
+        // Shade: Interfaces and abstract classes are allowed; concrete implementations will be checked at runtime
+        if (type.IsInterface || type.IsAbstract)
+        {
+            return true;
+        }
+        
         // Shade: Built-in types, primitives, and strings are naturally serializable
         if (type.IsPrimitive || type.IsEnum || type == typeof(string) || 
             type == typeof(decimal) || type == typeof(DateTime)) 
@@ -310,6 +316,9 @@ public static class Serializer
     private static void WriteTypeFields(object target, Utf8JsonWriter writer)
     {
         Type targetType = target.GetType();
+        
+        // Shade: Embed type metadata so polymorphic/interface fields can be re-instantiated
+        writer.WriteString("$type", targetType.AssemblyQualifiedName);
 
         // Shade: Gets cached fields or builds them atomically if missing to avoid race condition bugs and double lookups
         FieldInfoEntry[] fields = s_fieldCache.GetOrAdd(targetType, BuildValidFieldsArray);
@@ -486,15 +495,42 @@ public static class Serializer
 
     private static object? ReadNestedObject(ref Utf8JsonReader reader, Type targetType)
     {
+        // Shade: Clone reader to peek inside for a "$type" property without advancing the outer reader position
+        Utf8JsonReader typeReader = reader;
+        Type resolvedType = targetType;
+        
+        if (typeReader.TokenType == JsonTokenType.StartObject)
+        {
+            while (typeReader.Read() && typeReader.TokenType != JsonTokenType.EndObject)
+            {
+                if (typeReader.TokenType == JsonTokenType.PropertyName && typeReader.GetString() == "$type")
+                {
+                    typeReader.Read();
+                    string? typeName = typeReader.GetString();
+                
+                    if (!string.IsNullOrEmpty(typeName))
+                    {
+                        Type? concreteType = Type.GetType(typeName);
+                        if (concreteType != null)
+                        {
+                            resolvedType = concreteType;
+                        }
+                    }
+                    break;
+                }
+                typeReader.Skip();
+            }
+        }
+        
         // Shade: If it lacks [Serialize], skip the JSON block entirely
-        if (!IsTypeSerializable(targetType))
+        if (!IsTypeSerializable(resolvedType))
         {
             reader.Skip(); 
             return null;
         }
         
         // Shade: Instantiate a new object/struct of targetType and populate it
-        object? instance = Activator.CreateInstance(targetType, nonPublic: true);
+        object? instance = Activator.CreateInstance(resolvedType, nonPublic: true);
         if (instance == null) return null;
         
         PopulateObject(ref reader, ref instance);

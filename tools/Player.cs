@@ -1,4 +1,6 @@
 using ReflectionExperiments.Attributes;
+using ReflectionExperiments.DIInjection;
+using ReflectionExperiments.tools;
 
 // Shade: Test mockup player class to test the inspector (invoking private methods, etc.) and serialization
 // with custom attributes testing
@@ -75,7 +77,34 @@ public class Player : IEquatable<Player>
     [Ignore]
     public float m_publicFieldToIgnore = 5f;
 
-    public float m_publicFieldToSerialize = 5f;
+    public float PublicFieldToSerialize = 5f;
+
+    [SerializeField]
+    private IInventoryService m_inventory;
+    
+    [SerializeField]
+    private IWeapon m_weapon;
+
+    public Player()
+    {
+        m_inventory = new InventoryTest();
+        m_weapon = new Sword();
+        m_weapon.OnDispose += PutWeaponBackInInventory;
+    }
+
+    [Inject]
+    public Player(IInventoryService iis, IWeapon iw)
+    {
+        m_inventory = iis;
+        m_weapon = iw;
+        m_weapon.OnDispose += PutWeaponBackInInventory;
+    }
+    
+    private void PutWeaponBackInInventory()
+    {
+        m_inventory.Add(m_weapon.Entry, 1);
+        m_weapon.OnDispose -= PutWeaponBackInInventory;
+    }
 
     public void DisplayPlayerInfo()
     {
@@ -108,7 +137,7 @@ public class Player : IEquatable<Player>
                && m_playerStats == other.m_playerStats;
     }
 
-    public override int GetHashCode() => HashCode.Combine(m_name, m_playerStats);
+    public override int GetHashCode() => HashCode.Combine(m_name, m_playerStats, m_weapon, m_inventory);
 
     public override string ToString() => _GetPlayerInfo();
 }

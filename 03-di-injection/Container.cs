@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text;
 using ReflectionExperiments.Attributes;
 
 namespace ReflectionExperiments.DIInjection;
@@ -23,28 +24,25 @@ public class Container
     
     public T Resolve<T>() => (T)Resolve(typeof(T));
 
-    public object Resolve(Type type)
-    {
-        bool isInstantiable = type.IsInterface || type.IsAbstract;
-        
-        if (!isInstantiable)
-        {
-            return ResolveInternal(type, new Stack<Type>());
-        }
-
-        // Shade: If the type is an interface, try to get a registered implementation, else throw
-        return m_registeredPairs.TryGetValue(type, out Type? value) 
-            ? ResolveInternal(value, new Stack<Type>()) 
-            : throw new Exception($"Container@Resolve: type '{type.Name}' is not instantiable and no registered implementation was found.");
-    }
+    public object Resolve(Type type) => ResolveInternal(type, new Stack<Type>());
 
     private object ResolveInternal(Type type, Stack<Type> resolutionStack)
     {
+        // Shade: Resolve registered interface or abstract class mapping
+        if (type.IsInterface || type.IsAbstract)
+        {
+            if (!m_registeredPairs.TryGetValue(type, out Type? registered))
+            {
+                throw new Exception($"Container@Resolve: type '{type.Name}' is not instantiable and no registered implementation was found.");
+            }
+            type = registered;
+        }
+        
         // Shade: Check for circular dependency
         if (resolutionStack.Contains(type))
         {
             string path = string.Join(" -> ", resolutionStack.Reverse().Select(t => t.Name));
-            throw new Exception($"Circular dependency detected: {path} -> {type.Name}");
+            throw new CircularDependencyException($"Circular dependency detected: {path} -> {type.Name}");
         }
         
         // Shade: Push current type onto the active path stack
@@ -60,7 +58,7 @@ public class Container
         {
             // Shade: Try constructors with [Inject], ordered by parameter count (descending)
             IOrderedEnumerable<ConstructorInfo> injectedConstructors = constructors
-                .Where(c => c.GetCustomAttribute<InjectAttribute>() != null)
+                .Where(c => c.IsDefined(typeof(InjectAttribute), inherit: true))
                 .OrderByDescending(c => c.GetParameters().Length);
 
             object? resolvedType = BuildObject(type, injectedConstructors, resolutionStack);
@@ -68,7 +66,7 @@ public class Container
 
             // Shade: Else, try with regular constructors
             IOrderedEnumerable<ConstructorInfo> normalConstructors = constructors
-                .Where(c => c.GetCustomAttribute<InjectAttribute>() == null)
+                .Where(c => !c.IsDefined(typeof(InjectAttribute), inherit: true))
                 .OrderByDescending(c => c.GetParameters().Length);
 
             resolvedType = BuildObject(type, normalConstructors, resolutionStack);
@@ -103,6 +101,11 @@ public class Container
                     object resolvedParam = ResolveInternal(paramType, resolutionStack);
                     builtParams.Add(resolvedParam);
                 }
+                catch (CircularDependencyException)
+                {
+                    // Shade: Circular dependencies are fatal errors: abort constructor search and bubble up immediately
+                    throw;
+                }
                 catch (Exception)
                 {
                     // Shade: If any parameter fails to resolve, this constructor is invalid.
@@ -120,5 +123,87 @@ public class Container
         }
 
         return null;
+    }
+    
+    public string GetDependencyGraph<T>() => GetDependencyGraph(typeof(T));
+
+    public string GetDependencyGraph(Type type)
+    {
+        StringBuilder builder = new StringBuilder();
+        BuildDependencyGraphInternal(type, builder, indent: "", isLast: true, activeStack: new Stack<Type>());
+        return builder.ToString();
+    }
+
+    private void BuildDependencyGraphInternal(
+        Type type,
+        StringBuilder builder,
+        string indent,
+        bool isLast,
+        Stack<Type> activeStack)
+    {
+        // Shade: Determine the actual type to instantiate if an interface/abstract class is passed
+        Type actualType = type;
+        string interfacePrefix = "";
+
+        if (type.IsInterface || type.IsAbstract)
+        {
+            if (m_registeredPairs.TryGetValue(type, out Type? registered))
+            {
+                interfacePrefix = $"{type.Name} -> ";
+                actualType = registered;
+            }
+            else
+            {
+                builder.AppendLine($"{indent}{(isLast ? "└── " : "├── ")}{type.Name} [UNRESOLVED INTERFACE]");
+                return;
+            }
+        }
+
+        // Shade: Node header display line
+        string nodeLabel = $"{interfacePrefix}{actualType.Name}";
+        builder.AppendLine($"{indent}{(isLast ? "└── " : "├── ")}{nodeLabel}");
+
+        // Shade: Check for circular dependency to avoid infinite recursion
+        if (activeStack.Contains(actualType))
+        {
+            string childIndent = indent + (isLast ? "    " : "│   ");
+            builder.AppendLine($"{childIndent}└── [CIRCULAR DEPENDENCY DETECTED]");
+            return;
+        }
+
+        activeStack.Push(actualType);
+
+        try
+        {
+            // Shade: Select the constructor using the same priority logic as ResolveInternal
+            ConstructorInfo[] constructors = actualType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+            ConstructorInfo? targetConstructor = constructors
+                                                     .Where(c => c.GetCustomAttribute<InjectAttribute>() != null)
+                                                     .OrderByDescending(c => c.GetParameters().Length)
+                                                     .FirstOrDefault()
+                                                 ?? constructors
+                                                     .Where(c => c.GetCustomAttribute<InjectAttribute>() == null)
+                                                     .OrderByDescending(c => c.GetParameters().Length)
+                                                     .FirstOrDefault();
+
+            if (targetConstructor == null)
+            {
+                return;
+            }
+
+            ParameterInfo[] parameters = targetConstructor.GetParameters();
+            string nextIndent = indent + (isLast ? "    " : "│   ");
+
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                bool lastParam = i == parameters.Length - 1;
+                BuildDependencyGraphInternal(parameters[i].ParameterType, builder, nextIndent, lastParam, activeStack);
+            }
+        }
+        finally
+        {
+            activeStack.Pop();
+        }
     }
 }
